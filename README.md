@@ -253,3 +253,43 @@ python -c "import pal, hal, qvl; print(pal.__file__); print(qvl.__file__)"
 | 运行 `setup_trial.py` 提示 “Unable to connect to QLabs” | 先在 QLabs 中打开并加载 **QCar Cityscape**（SDCS 路网）场景，再运行脚本；脚本会自动清空上一次生成的 actor 与实时模型 |
 | 斑马线 / 信号灯的位置或大小与预期不符 | 坐标表给的是 SDCS 世界坐标，脚本按 `QLABS_SCALE = 10` 换算为 QLabs 坐标（与车辆生成约定一致）；若使用其它比例的场景，修改 `QLABS_SCALE` 或坐标表数值即可 |
 | 信号灯不按预期变化 | `setup_trial.py` 默认把所有灯设为绿灯；用 `--cycle` 让脚本自动红/绿交替，或在演示脚本中调用 `setup_trial.set_light_color(..., actorNumbers=[...])` |
+---
+
+## 9. 行人生成功能（自 v2）
+
+`Untitled-2.py` 已集成来自 `setup3.py` 的行人生成逻辑：
+
+| 组件 | 说明 |
+| --- | --- |
+| `PEDESTRIAN_PATHS` | 5 条行人路径（SDCS 坐标），与 5 条斑马线位置一一对应 |
+| `spawn_people(qlabs, scale)` | 用 `QLabsPerson.spawn_id()` 生成 5 个行人，actorNumber=100~104 |
+| `start_people(people)` | 为每个行人启动 daemon 线程，以 WALK 速度在 start/end 之间往返走动 |
+
+行人线程在 Ctrl+C 退出时随进程结束，QLabs 的 `destroy_all_spawned_actors()` 会一并清理。
+
+---
+
+## 10. 信号灯防误识别（自 v2）
+
+两个典型误检的解决方案：
+
+| 误检场景 | 置信度 | 根因 | 对策 |
+| --- | --- | --- | --- |
+| 远处绿灯 → RED | ~40% | 小目标像素不足，模型混淆 | `confThreshold` 0.35 → **0.45**，直接拦截低置信度误判 |
+| 信号灯背面外壳 → RED | ~75% | 暗色外壳偏红，模型未见背面样本 | **HSV 颜色二次验证**：`_verifyRedLight()` 检查检测框内红色像素占比 ≥ 8% 才放行 |
+
+颜色验证逻辑：裁剪 RED 检测框 → BGR→HSV → 统计红色像素（H∈[0,12]∪[170,180]，S≥50，V≥60）→ 占比 < 8% 则丢弃。
+真红灯发光区域红色占比 >30%，背面外壳/远处绿灯 < 5%，阈值 8% 有足够安全裕度。
+
+---
+
+## 11. 性能优化记录（自 v2）
+
+| 参数 | 旧值 | 新值 | 效果 |
+| --- | --- | --- | --- |
+| `yoloImageSize` | 640 | 480 | 推理面积降至 56%，速度提升约 ×1.7 |
+| `detectPeriodMax` | 0.5 s | 0.33 s | 保底 ≥ 3 Hz |
+| 自适应乘数 | ×1.5 | ×1.2 | 减少等待时间 |
+| `lightConfirmFrames` | 3 帧 | 7 帧 | 信号灯确认更稳健，减少误触发 |
+| `confThreshold` | 0.35 | 0.45 | 过滤低置信度误判 |
+| 相机窗口 | 固定 960×720 | 640×480（可缩放） | 默认尺寸恢复，保留拖动调整能力 |
