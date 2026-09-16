@@ -47,7 +47,7 @@ class DecisionParameters:
     cruiseSpeed: float = 0.50          # 正常巡航速度
     blindSpeed: float = 0.15           # 感知失效时的谨慎行驶速度
     crosswalkSpeed: float = 0.20       # 通过斑马线/前方远处行人时的速度
-    coneSlowSpeed: float = 0.30        # 远处锥桶减速后的速度
+    coneSlowSpeed: float = 0.20        # 远处锥桶减速后的速度
     bypassSpeed: float = 0.25          # 绕行锥桶时的速度
 
     # ===== 感知有效性 =====
@@ -75,8 +75,8 @@ class DecisionParameters:
     clearConfirmTime: float = 0.60                # 障碍离开走廊后需保持“畅通”的确认时间（秒）
 
     # ===== 锥桶绕行 =====
-    coneNearBottomYNorm: float = 0.72             # 锥桶底边越过该值视为“距离已近”
-    coneStopAreaPercent: float = 0.90             # 锥桶面积占比超过该值视为“距离已近”
+    coneNearBottomYNorm: float = 0.60             # 锥桶底边越过该值视为“距离已近”（0.72→0.60，更早触发）
+    coneStopAreaPercent: float = 0.45             # 锥桶面积占比超过该值视为“距离已近”（0.90→0.45，更容易触发）
     coneObserveTime: float = 1.20                 # 近距锥桶的停车观察时间（秒）
     bypassOffset: float = 0.35                    # 绕行横向偏移量（m，沿参考路径左法向为正）
     bypassMinClearance: float = 0.18              # 锥桶横向距离超过该值时认为已有足够绕行空间（归一化）

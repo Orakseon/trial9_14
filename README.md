@@ -309,3 +309,39 @@ python -c "import pal, hal, qvl; print(pal.__file__); print(qvl.__file__)"
 | 失败统计 | `failedCones` 跟踪生成失败的锥桶，摘要与警告消息均包含锥桶计数 |
 
 锥桶位置如需根据实际路口几何调整，直接修改 `CONE_POSITIONS` 列表中的 SDCS 坐标即可；若需适配 `QLABS_SCALE` 与其他要素保持一致，脚本中所有要素共用同一缩放倍数。
+---
+
+## 13. 锥桶避障响应调优与误检防御（自 v2）
+
+### 锥桶近距阈值调整
+
+原有锥桶"距离已近"的判断条件过于保守，导致车辆接近锥桶时才触发减速/停车，来不及避让。两处关键阈值同步下调：
+
+| 参数 | 旧值 | 新值 | 效果 |
+| --- | --- | --- | --- |
+| `coneSlowSpeed` | 0.30 m/s | **0.20 m/s** | 远处锥桶即减到更低速度 |
+| `coneNearBottomYNorm` | 0.72 | **0.60** | 底边在画面更低位置即判定为"已近"（更早触发） |
+| `coneStopAreaPercent` | 0.90 | **0.45** | 锥桶面积占比更小时即判定为"已近"（更容易触发停车/绕行） |
+
+**涉及文件**（两处需同步修改）：
+- `decision_layer.py`：`DecisionParameters` 类的默认字段值（第 78–79, 84 行）
+- `QCar2_YOLO_Decision_Control.py`：`decisionParams` 实例化参数（第 114, 130–131 行）
+
+### 误判防御：People/Cow 二次过滤
+
+在空旷路面上，YOLO 偶尔将路面纹理/路肩误判为 People 或 Cow（置信度 ~0.45–0.55）。防御措施分两层：
+
+| 层级 | 策略 | 说明 |
+| --- | --- | --- |
+| **主阈值** | `confThreshold` 0.45 → 0.50 | 全局置信度门槛，拦截大量低置信度误判 |
+| **二次过滤** | 类别特定校验 | 在 `perception_yolo.py` 的 `detect()` 中，对 People/Cow 额外要求：<br>• 置信度 ≥ **0.60**（独立于全局阈值）<br>• 宽高比 ≤ **2.5:1**（过滤横向宽幅路面纹理伪检） |
+
+宽高比校验的逻辑：真实行人/奶牛的检测框接近方形（w/h ≈ 0.5–1.5），而路面纹理误检框往往宽高比 > 3。使用 `max(y2-y1, 1)` 防止除零错误。
+
+```
+detections = [d for d in detections if not (
+    d.label in ('People', 'Cow') and
+    (d.confidence < 0.60 or
+     (d.x2 - d.x1) / max(d.y2 - d.y1, 1) > 2.5)
+)]
+```

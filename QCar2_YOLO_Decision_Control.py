@@ -89,9 +89,14 @@ maxSteeringAngleDeg = 30    # 前轮转角限幅（°）
 stanleySpeedFloor = 0.10    # Stanley 速度分母下限（m/s），避免停车时转向增益发散
 offsetRateLimit = 0.60      # 绕行横向偏移变化率上限（m/s）
 
+# ===== 油门缩放（转弯/锥桶避让时降油门，避免车速过冲）=====
+turnThrottleScale = 0.90          # 转弯时油门缩放（直线巡航的90%）
+turnSteeringThresholdRad = 0.087  # 转弯判定前轮转角阈值（rad，≈5°）
+coneAvoidThrottleScale = 0.80     # 锥桶避让时油门额外缩放（在减速限速基础上再降）
+
 # ===== 识别（YOLO）参数 =====
 yoloModelPath = None        # None 表示自动搜索本目录/5_factors 下的 yolov11s.pt
-confThreshold = 0.45        # 置信度阈值（提高到 0.45，过滤远处绿灯→红灯误判 40%）
+confThreshold = 0.50        # 置信度阈值（0.45→0.50，过滤路面/路肩→People/Cow 误判）
 iouThreshold = 0.5          # NMS 交并比阈值
 yoloImageSize = 480         # YOLO 推理尺寸（降低到 480 提升帧率；仿真红绿灯较大，精度损失可控）
 yoloDevice = None           # None 自动选择；CPU 推理可显式写 'cpu'
@@ -111,7 +116,7 @@ decisionParams = DecisionParameters(
     cruiseSpeed=0.50,                 # 巡航速度
     blindSpeed=0.15,                  # 感知失效时的谨慎速度（改为 0.0 则停车等待）
     crosswalkSpeed=0.20,              # 斑马线/前方交通要素限速
-    coneSlowSpeed=0.30,               # 远距锥桶限速
+    coneSlowSpeed=0.20,               # 远距锥桶限速（0.30→0.20，更早减速）
     bypassSpeed=0.25,                 # 绕行锥桶限速
     detectionTimeout=1.5,             # 识别结果有效期（秒）
     corridorHalfWidth=0.32,           # 前方走廊半宽（画面宽度比例）
@@ -127,8 +132,8 @@ decisionParams = DecisionParameters(
     dynamicStopBottomYNorm=0.62,      # 行人/奶牛“距离已近”的底边阈值
     dynamicStopAreaPercent=0.80,
     clearConfirmTime=0.60,            # 障碍离开走廊后的畅通确认时间
-    coneNearBottomYNorm=0.72,         # 锥桶“距离已近”的底边阈值
-    coneStopAreaPercent=0.90,
+    coneNearBottomYNorm=0.60,         # 锥桶“距离已近”的底边阈值（0.72→0.60，更早触发停车）
+    coneStopAreaPercent=0.45,         # 锥桶"距离已近"的面积阈值（0.90→0.45，更容易触发）
     coneObserveTime=1.20,             # 近距锥桶停车观察时间
     bypassOffset=0.35,                # 绕行横向偏移量（m）
     bypassMinClearance=0.18,          # 锥桶横向偏离超过该值视为不挡路
@@ -419,6 +424,17 @@ def controlLoop(shared: SharedState) -> None:
                     delta = steeringController.update(pControl, th, v, offset)
                 else:
                     delta = 0.0
+
+                # 转弯时降低油门至直线巡航的 90%，避免过弯速度过冲
+                if abs(delta) > turnSteeringThresholdRad:
+                    u *= turnThrottleScale
+                # 遇锥桶执行避让时再额外降低油门（与转弯叠加）
+                if decision.state in (
+                    TrafficDecision.STATE_SLOW_CONE,
+                    TrafficDecision.STATE_BYPASS_CONE,
+                    TrafficDecision.STATE_STOP_CONE,
+                ):
+                    u *= coneAvoidThrottleScale
             qcar.write(u, delta)
 
             # ---- 遥测与可视化采样（10 Hz）----

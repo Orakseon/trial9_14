@@ -354,6 +354,13 @@ class YoloTrafficPerception:
         detections = [d for d in detections
                       if d.label != 'RED' or self._verifyRedLight(frame, d)]
 
+        # 动态障碍（行人/奶牛）二次过滤：路面/路肩常被低置信度误判，增加宽高比与置信度双重校验
+        detections = [d for d in detections if not (
+            d.label in ('People', 'Cow') and
+            (d.confidence < 0.60 or                              # 对 People/Cow 提高置信度门槛
+             (d.x2 - d.x1) / max(d.y2 - d.y1, 1) > 2.5)         # 过宽的框不像是行人/奶牛（路面纹理）
+        )]
+
         # 按面积占比降序排列：最近的交通要素排在最前，便于决策层直接取用
         detections.sort(key=lambda item: item.areaPercent, reverse=True)
 
