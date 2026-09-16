@@ -361,6 +361,9 @@ class YoloTrafficPerception:
              (d.x2 - d.x1) / max(d.y2 - d.y1, 1) > 2.5)         # 过宽的框不像是行人/奶牛（路面纹理）
         )]
 
+        # 取消对奶牛的识别：直接丢弃所有 Cow 检测结果
+        detections = [d for d in detections if d.label != 'Cow']
+
         # 按面积占比降序排列：最近的交通要素排在最前，便于决策层直接取用
         detections.sort(key=lambda item: item.areaPercent, reverse=True)
 
