@@ -31,6 +31,7 @@ from qvl.qlabs import QuanserInteractiveLabs
 from qvl.real_time import QLabsRealTime
 from qvl.system import QLabsSystem
 from qvl.traffic_light import QLabsTrafficLight
+from qvl.traffic_cone import QLabsTrafficCone
 import threading
 from qvl.person import QLabsPerson
 import pal.resources.rtmodels as rtmodels
@@ -68,6 +69,14 @@ CROSSWALK_SPECS = [
     dict(name='中央西侧斑马线', location=[-0.4, 0.9, 0.0], rotation=[0, 0, 90]),
     dict(name='中央东侧斑马线', location=[0.6, 0.9, 0.0], rotation=[0, 0, 90]),
     dict(name='右上方倾斜斑马线', location=[0.9, 3.7, 0.0], rotation=[0, 0, 17]),
+]
+
+# 要素：锥桶（QLabs 坐标，从 Untitled-3.py 参考位置）
+CONE_POSITIONS = [
+    [-19.8, 37.0, 0.25],
+    [-19.8, 36.0, 0.25],
+    [-17.5, 26.5, 0.25],
+    [-17.5, 25.5, 0.25],
 ]
 
 # 要素：行人路径（SDCS 世界坐标，与斑马线位置对应，生成时乘以 QLABS_SCALE）
@@ -308,6 +317,34 @@ def set_light_color(lightHandles, colorName, actorNumbers=None):
     return count
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+#region : 锥桶生成
+
+def spawn_cones(qlabs, verbose=True):
+    """生成 4 个交通锥桶（QLabsTrafficCone.spawn_id_degrees）。"""
+    if verbose:
+        print('\n[要素：锥桶] 生成锥桶（QLabsTrafficCone.spawn_id_degrees）：')
+    cone = QLabsTrafficCone(qlabs)
+    handles = []
+    for i, position in enumerate(CONE_POSITIONS):
+        status = cone.spawn_id_degrees(
+            actorNumber=200 + i,
+            location=position,
+            rotation=[0, 0, 0],
+            scale=[1, 1, 1],
+            configuration=0,
+            waitForConfirmation=True,
+        )
+        handle = dict(actorNumber=200 + i, position=position, status=status)
+        handles.append(handle)
+        if verbose:
+            print('  [{}/{}] actor={}  pos=({:.1f}, {:.1f}, {:.2f})  {}'.format(
+                i + 1, len(CONE_POSITIONS), 200 + i,
+                position[0], position[1], position[2],
+                'OK' if status in (None, 0) else 'FAIL({})'.format(status)))
+    return handles
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 #region : 车辆与实时模型
 def spawn_vehicle(qlabs, initialPosition=None, initialOrientation=None, verbose=True):
     """
@@ -435,6 +472,8 @@ def setup(
     crosswalks = spawn_crosswalks(qlabs, verbose=verbose)
     # ---- 要素二：信号灯 4 个 ----
     trafficLights = spawn_traffic_lights(qlabs, initialColor=initialLightColor, verbose=verbose)
+    # ---- 锥桶 4 个 ----
+    cones = spawn_cones(qlabs, verbose=verbose)
     # ---- 要素三：行人 5 个 ----
     people = spawn_people(qlabs, QLABS_SCALE, verbose=verbose)
     start_people(people)
@@ -453,20 +492,25 @@ def setup(
                         if item['status'] not in (None, 0)]
     failedLights = [item['name'] for item in trafficLights
                     if item['status'] not in (None, 0)]
+    failedCones = [item['position'] for item in cones
+                   if item['status'] not in (None, 0)]
     failedPeople = [item['name'] for item in people
                     if item['status'] not in (None, 0)]
     if verbose:
-        print('\n场景搭建完成：斑马线 {}/{} 条，信号灯 {}/{} 个，行人 {}/{} 个{}。'.format(
+        print('\n场景搭建完成：斑马线 {}/{} 条，信号灯 {}/{} 个，锥桶 {}/{} 个，行人 {}/{} 个{}。'.format(
             len(crosswalks) - len(failedCrosswalks), len(crosswalks),
             len(trafficLights) - len(failedLights), len(trafficLights),
+            len(cones) - len(failedCones), len(cones),
             len(people) - len(failedPeople), len(people),
             '，车辆 1 台' if vehicle is not None else '，未生成车辆'))
-        if failedCrosswalks or failedLights or failedPeople:
-            print('[警告] 生成失败的要素：斑马线 {}  信号灯 {}  行人 {}'.format(failedCrosswalks, failedLights, failedPeople))
+        if failedCrosswalks or failedLights or failedCones or failedPeople:
+            print('[警告] 生成失败的要素：斑马线 {}  信号灯 {}  锥桶 {}  行人 {}'.format(
+                failedCrosswalks, failedLights, failedCones, failedPeople))
     return {
         'qlabs': qlabs,
         'crosswalks': crosswalks,
         'traffic_lights': trafficLights,
+        'cones': cones,
         'people': people,
         'vehicle': vehicle,
         'vehicle_location': vehicleLocation,
