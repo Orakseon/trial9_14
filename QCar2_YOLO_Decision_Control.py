@@ -94,6 +94,10 @@ turnThrottleScale = 0.90          # 转弯时油门缩放（直线巡航的90%�
 turnSteeringThresholdRad = 0.087  # 转弯判定前轮转角阈值（rad，≈5°）
 coneAvoidThrottleScale = 0.80     # 锥桶避让时油门额外缩放（在减速限速基础上再降）
 
+# ===== 连续转向降速（直道巡航 0.40，连续打方向时降至 0.30）=====
+sustainedSteeringFrames = 10     # 连续转向帧数阈值（100 Hz 下 ≈ 0.1 s）
+steeringCruiseSpeed = 0.30       # 连续转向时的巡航速度（m/s）
+
 # ===== 识别（YOLO）参数 =====
 yoloModelPath = None        # None 表示自动搜索本目录/5_factors 下的 yolov11s.pt
 confThreshold = 0.50        # 置信度阈值（0.45→0.50，过滤路面/路肩→People/Cow 误判）
@@ -113,7 +117,7 @@ detectPeriodMax = 0.33      # 识别周期上限（秒），确保最低约 3 Hz
 # 各阈值以“面积占比 / 归一化坐标”表达，与相机分辨率无关；
 # 现场标定时可打开可视化画面上的走廊辅助线（drawCorridorGuide）对照调整。
 decisionParams = DecisionParameters(
-    cruiseSpeed=0.30,                 # 巡航速度（0.50→0.30，更安全的上限）
+    cruiseSpeed=0.40,                 # 巡航速度（0.30→0.40，直道更快；连续转向时自动降至 steeringCruiseSpeed）
     blindSpeed=0.15,                  # 感知失效时的谨慎速度（改为 0.0 则停车等待）
     crosswalkSpeed=0.20,              # 斑马线/前方交通要素限速
     coneSlowSpeed=0.20,               # 远距锥桶限速（0.30→0.20，更早减速）
@@ -131,7 +135,7 @@ decisionParams = DecisionParameters(
     stopSignResetTime=3.0,            # 停止标志闭锁复位时间
     dynamicStopBottomYNorm=0.62,      # 行人/奶牛“距离已近”的底边阈值
     dynamicStopAreaPercent=0.80,
-    clearConfirmTime=0.60,            # 障碍离开走廊后的畅通确认时间
+    clearConfirmTime=1.0,             # 障碍离开走廊后的畅通确认时间（0.60→1.0，加长回正后行驶）
     coneNearBottomYNorm=0.60,         # 锥桶“距离已近”的底边阈值（0.72→0.60，更早触发停车）
     coneStopAreaPercent=0.45,         # 锥桶"距离已近"的面积阈值（0.90→0.45，更容易触发）
     coneObserveTime=1.20,             # 近距锥桶停车观察时间
@@ -331,6 +335,7 @@ def controlLoop(shared: SharedState) -> None:
     delta = 0.0
     count = 0
     countMax = max(int(controllerUpdateRate / 10), 1)   # 可视化采样频率 10 Hz
+    _steerCount = 0                       # 连续转向帧计数器
 
     # ---- 控制器初始化 ----
     speedController = SpeedController(
@@ -417,13 +422,23 @@ def controlLoop(shared: SharedState) -> None:
                 offsetShaper.reset(0.0)
             else:
                 # 期望速度/偏移先做斜坡限制，再交给 PI 与 Stanley 跟踪
-                vRefShaped = speedRamp.update(decision.vRef, dt)
                 offset = offsetShaper.update(decision.lateralOffset, dt)
-                u = speedController.update(v, vRefShaped, dt)
                 if steeringController is not None:
                     delta = steeringController.update(pControl, th, v, offset)
                 else:
                     delta = 0.0
+
+                # 连续转向检测：前轮转角超过阈值则累计帧数
+                if abs(delta) > turnSteeringThresholdRad:
+                    _steerCount += 1
+                else:
+                    _steerCount = 0
+                # 连续打方向时巡航速度降至 steeringCruiseSpeed（0.30 m/s）
+                if _steerCount >= sustainedSteeringFrames and decision.state == TrafficDecision.STATE_CRUISE:
+                    decision.vRef = min(decision.vRef, steeringCruiseSpeed)
+
+                vRefShaped = speedRamp.update(decision.vRef, dt)
+                u = speedController.update(v, vRefShaped, dt)
 
                 # 转弯时降低油门至直线巡航的 90%，避免过弯速度过冲
                 if abs(delta) > turnSteeringThresholdRad:
