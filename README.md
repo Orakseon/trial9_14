@@ -17,6 +17,7 @@ QCar 的速度 PI 控制与 Stanley 路径跟踪**。
 | `perception_yolo.py` | 识别层 | YOLOv11 推理与结果解析（类别、置信度、面积占比、归一化几何量）、走廊辅助线工具 |
 | `decision_layer.py` | 决策层 | 交通规则状态机，输出期望速度 `vRef` 与绕行横向偏移 `lateralOffset` |
 | `control_layer.py` | 控制层 | 期望速度斜坡、速度 PI、绕行偏移斜坡、Stanley 转向控制器 |
+| `lidar_perception.py` | 感知层 | 激光雷达互补感知：网格聚类障碍检测 → 转换为 YOLO 兼容 Detection 对象 |
 | `yolov11s.pt` | 权重 | 与 `../5_factors/sd/YOLO_object_detection.py` 使用的同一套 8 类权重 |
 
 类别映射（与权重严格一致，顺序不可更改）：
@@ -64,13 +65,18 @@ QCar 的速度 PI 控制与 Stanley 路径跟踪**。
 ```
 车头 RealSense RGB 图像
         │
-        ▼
-[识别层] YoloTrafficPerception.detect(frame) ──► DetectionFrame
-        │    Detection: label / confidence / areaPercent / centerXNorm / bottomYNorm
-        │               isInCorridor(halfWidth)  目标是否挡在前方走廊内
-        │               isNear(bottomY, areaPct) 目标是否已经足够近
-        ▼
-[决策层] TrafficDecision.update(detectionFrame, dt, v) ──► DecisionResult
+        ▼                              ┌──────────────────┐
+[识别层] YoloTrafficPerception         │  QCarLidar (20Hz) │
+        │    DetectionFrame            └────────┬─────────┘
+        │                                      │ LidarObstacle[]
+        │                             ┌────────▼─────────┐
+        │                             │ lidar_perception  │
+        │                             │ to_detections()   │
+        │                             └────────┬─────────┘
+        │                           Detection(label=People)
+        │                                      │
+        ▼                                      ▼
+[决策层] TrafficDecision.update(detectionFrame + lidarDets, dt, v)
         │    DecisionResult: state / vRef / lateralOffset / reason / countdown
         ▼
 [控制层] SpeedRampLimiter → SpeedController → throttle
@@ -344,4 +350,50 @@ detections = [d for d in detections if not (
     (d.confidence < 0.60 or
      (d.x2 - d.x1) / max(d.y2 - d.y1, 1) > 2.5)
 )]
+
+---
+
+## 14. Lidar 激光雷达互补感知（自 v3）
+
+Lidar 与 YOLO 视觉互补：检测到 YOLO 可能遗漏的障碍物（低光/背光/复杂纹理），
+自动转换为 `People` 标签的 `Detection` 对象注入决策层。
+
+### 架构
+
+| 组件 | 说明 |
+| --- | --- |
+| `lidar_perception.py` | 独立的雷达感知模块，含 `LidarProcessor` 类 |
+| `QCarLidar` | pal 库标准接口，100 点/扫描，模式 2（标准测距） |
+| 检测频率 | 每 5 个控制周期一次（100 Hz → **20 Hz**），平衡精度与计算开销 |
+| 融合方式 | Lidar 障碍物以 `People` 标签注入 `DetectionFrame.detections`，决策层自动按行人逻辑处理 |
+
+### 障碍检测算法
+
+1. **坐标转换**：`anglesCar = wrap_2pi(2.5π - angles)`，`x=d·cos(a)`，`y=d·sin(a)`（车身系：x=前，y=左）
+2. **筛选**：距离 0.15~4 m，正前方 ±75° 锥形区域
+3. **网格聚类**：5 cm 分辨率 → 8 连通 BFS → 簇内点数 ≥ 12 判定为障碍
+4. **质心提取**：取簇内点的均值坐标 (cx, cy) → 距离 + 方位角
+
+### 坐标映射（Lidar → 归一化）
+
+| Lidar 物理量 | 归一化坐标 | 公式 |
+| --- | --- | --- |
+| 纵向距离 d (m) | `bottomYNorm` | `1.0 − d / 5.0`（越近越大） |
+| 横向偏移 y (m) | `lateralErrorNorm` | `−y × 0.32`（1 m ≈ 0.32，走廊半宽对应 1 m） |
+| 簇大小 + 距离 | `areaPercent` | `2.5 / (d + 0.3)`（越近越大） |
+
+### 决策效果
+
+- 障碍物在走廊内（横向 ≤1 m）且距离 < ~2 m → **停车等待** (`STOP_PEDESTRIAN`)
+- 障碍离开后 0.6 s → **自动放行**
+- Lidar 初始化失败 / 不可用时 → **零干预退化为纯视觉模式**
+
+### 配置参数（`QCar2_YOLO_Decision_Control.py`）
+
+```python
+enableLidar = True           # 是否启用激光雷达（False 则纯视觉）
+lidarDetectInterval = 5      # 检测间隔（控制周期数，100Hz 下 5 次 ≈ 20Hz）
+```
+
+Lidar 障碍检测参数在 `lidar_perception.py` 的 `LidarConfig` 中集中管理：`detectionRadius`、`gridResolution`、`minClusterPoints`、`validAngleHalf`、`maxRange` 等。
 ```

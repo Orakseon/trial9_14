@@ -44,7 +44,7 @@ class DecisionParameters:
           现场标定时可借助主程序画面上的走廊辅助线（draw_corridor_guide）对照调整。
     """
     # ===== 速度决策（m/s）=====
-    cruiseSpeed: float = 0.50          # 正常巡航速度
+    cruiseSpeed: float = 0.30          # 正常巡航速度
     blindSpeed: float = 0.15           # 感知失效时的谨慎行驶速度
     crosswalkSpeed: float = 0.20       # 通过斑马线/前方远处行人时的速度
     coneSlowSpeed: float = 0.20        # 远处锥桶减速后的速度

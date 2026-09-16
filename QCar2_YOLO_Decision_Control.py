@@ -99,9 +99,9 @@ turnThrottleScale = 0.90          # 转弯时油门缩放（直线巡航的90%�
 turnSteeringThresholdRad = 0.087  # 转弯判定前轮转角阈值（rad，≈5°）
 coneAvoidThrottleScale = 0.80     # 锥桶避让时油门额外缩放（在减速限速基础上再降）
 
-# ===== 连续转向降速（直道巡航 0.40，连续打方向时降至 0.30）=====
+# ===== 连续转向降速（直道巡航 0.30，连续打方向时降至 0.20）=====
 sustainedSteeringFrames = 10     # 连续转向帧数阈值（100 Hz 下 ≈ 0.1 s）
-steeringCruiseSpeed = 0.35       # 连续转向时的巡航速度（m/s）
+steeringCruiseSpeed = 0.20       # 连续转向时的巡航速度（m/s）
 
 # ===== 识别（YOLO）参数 =====
 yoloModelPath = None        # None 表示自动搜索本目录/5_factors 下的 yolov11s.pt
@@ -122,7 +122,7 @@ detectPeriodMax = 0.33      # 识别周期上限（秒），确保最低约 3 Hz
 # 各阈值以“面积占比 / 归一化坐标”表达，与相机分辨率无关；
 # 现场标定时可打开可视化画面上的走廊辅助线（drawCorridorGuide）对照调整。
 decisionParams = DecisionParameters(
-    cruiseSpeed=0.45,                 # 巡航速度（直道更快；连续转向时自动降至 steeringCruiseSpeed）
+    cruiseSpeed=0.30,                 # 巡航速度（直道；连续转向时自动降至 steeringCruiseSpeed）
     blindSpeed=0.15,                  # 感知失效时的谨慎速度（改为 0.0 则停车等待）
     crosswalkSpeed=0.20,              # 斑马线/前方交通要素限速
     coneSlowSpeed=0.20,               # 远距锥桶限速（0.30→0.20，更早减速）
@@ -471,7 +471,7 @@ def controlLoop(shared: SharedState) -> None:
                     _steerCount += 1
                 else:
                     _steerCount = 0
-                # 连续打方向时巡航速度降至 steeringCruiseSpeed（0.30 m/s）
+                # 连续打方向时巡航速度降至 steeringCruiseSpeed（0.20 m/s）
                 if _steerCount >= sustainedSteeringFrames and decision.state == TrafficDecision.STATE_CRUISE:
                     decision.vRef = min(decision.vRef, steeringCruiseSpeed)
 
