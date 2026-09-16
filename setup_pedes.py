@@ -73,11 +73,11 @@ CROSSWALK_SPECS = [
 
 # 要素：行人路径（SDCS 世界坐标，与斑马线位置对应，生成时乘以 QLABS_SCALE）
 PEDESTRIAN_PATHS = [
-    dict(name='北侧行人', start=[-0.4, 1.4, 0.005], end=[0.7, 1.4, 0.005], yaw=0),
-    dict(name='南侧行人', start=[0.75, 0.5, 0.005], end=[-0.3, 0.5, 0.005], yaw=0),
-    dict(name='西侧行人', start=[-0.4, 0.55, 0.005], end=[-0.4, 1.3, 0.005], yaw=math.pi/2),
-    dict(name='东侧行人', start=[0.6, 1.35, 0.005], end=[0.6, 0.5, 0.005], yaw=math.pi/2),
-    dict(name='右上斜向行人', start=[0.65, 3.55, 0.005], end=[1.15, 3.85, 0.005], yaw=math.radians(17)),
+    dict(name='北侧行人', start=[-0.4, 1.4, 0.5], end=[0.7, 1.4, 0.5], yaw=0),
+    dict(name='南侧行人', start=[0.75, 0.5, 0.5], end=[-0.3, 0.5, 0.5], yaw=0),
+    dict(name='西侧行人', start=[-0.4, 0.55, 0.5], end=[-0.4, 1.3, 0.5], yaw=math.pi/2),
+    dict(name='东侧行人', start=[0.6, 1.35, 0.5], end=[0.6, 0.5, 0.5], yaw=math.pi/2),
+    dict(name='右上斜向行人', start=[0.65, 3.55, 0.5], end=[1.15, 3.85, 0.5], yaw=math.radians(17)),
 ]
 
 # 要素：锥桶（QLabs 坐标，从 Untitled-3.py 参考位置）
@@ -391,7 +391,7 @@ def spawn_people(qlabs, scale, verbose=True):
         print('\n[要素三] 生成行人（QLabsPerson.spawn_id）：')
     for i, data in enumerate(PEDESTRIAN_PATHS):
         person = QLabsPerson(qlabs)
-        location = [v * scale for v in data['start']]
+        location = [data['start'][0] * scale, data['start'][1] * scale, data['start'][2]]
         status = person.spawn_id(
             actorNumber=100 + i,
             location=location,
@@ -402,8 +402,8 @@ def spawn_people(qlabs, scale, verbose=True):
         )
         handle = {
             'person': person,
-            'start': [v * scale for v in data['start']],
-            'end': [v * scale for v in data['end']],
+            'start': [data['start'][0] * scale, data['start'][1] * scale, data['start'][2]],
+            'end': [data['end'][0] * scale, data['end'][1] * scale, data['end'][2]],
             'yaw': data['yaw'],
             'name': data['name'],
             'status': status,
