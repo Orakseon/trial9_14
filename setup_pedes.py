@@ -423,9 +423,9 @@ def _pedestrian_loop(data):
     person = data['person']
     while True:
         person.move_to(location=data['end'], speed=person.WALK, waitForConfirmation=True)
-        time.sleep(0.4)
-        person.move_to(location=data['start'], speed=person.WALK, waitForConfirmation=True)
         time.sleep(0.3)
+        person.move_to(location=data['start'], speed=person.WALK, waitForConfirmation=True)
+        time.sleep(0.2)
 
 
 def start_people(people):
