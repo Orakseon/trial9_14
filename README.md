@@ -293,3 +293,19 @@ python -c "import pal, hal, qvl; print(pal.__file__); print(qvl.__file__)"
 | `lightConfirmFrames` | 3 帧 | 7 帧 | 信号灯确认更稳健，减少误触发 |
 | `confThreshold` | 0.35 | 0.45 | 过滤低置信度误判 |
 | 相机窗口 | 固定 960×720 | 640×480（可缩放） | 默认尺寸恢复，保留拖动调整能力 |
+
+---
+
+## 12. 锥桶生成集成（setup_static.py，自 v2）
+
+`setup_static.py` 参考 `Untitled-3.py` 的锥桶生成逻辑，新增锥桶场景要素：
+
+| 组件 | 说明 |
+| --- | --- |
+| `CONE_POSITIONS` | 4 个锥桶在 SDCS 世界坐标系下的位置（初始沿用 Untitled-3 参考坐标） |
+| `spawn_cones(qlabs, verbose=True)` | 用 `QLabsTrafficCone.spawn_id_degrees()` 生成锥桶，actorNumber=200~203 |
+| setup() 调用 | 在信号灯生成之后、车辆生成之前执行 `cones = spawn_cones(qlabs, ...)` |
+| 返回字典 | 新增 `'cones': cones` 字段，供调用方获取生成状态 |
+| 失败统计 | `failedCones` 跟踪生成失败的锥桶，摘要与警告消息均包含锥桶计数 |
+
+锥桶位置如需根据实际路口几何调整，直接修改 `CONE_POSITIONS` 列表中的 SDCS 坐标即可；若需适配 `QLABS_SCALE` 与其他要素保持一致，脚本中所有要素共用同一缩放倍数。

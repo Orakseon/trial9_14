@@ -32,6 +32,7 @@ from qvl.qlabs import QuanserInteractiveLabs
 from qvl.real_time import QLabsRealTime
 from qvl.system import QLabsSystem
 from qvl.traffic_light import QLabsTrafficLight
+from qvl.traffic_cone import QLabsTrafficCone
 import pal.resources.rtmodels as rtmodels
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -67,6 +68,14 @@ CROSSWALK_SPECS = [
     dict(name='中央西侧斑马线', location=[-0.4, 0.9, 0.0], rotation=[0, 0, 90]),
     dict(name='中央东侧斑马线', location=[0.6, 0.9, 0.0], rotation=[0, 0, 90]),
     dict(name='右上方倾斜斑马线', location=[0.9, 3.7, 0.0], rotation=[0, 0, 17]),
+]
+
+# 要素：锥桶（QLabs 坐标，从 Untitled-3.py 参考位置）
+CONE_POSITIONS = [
+    [-19.0, 37.0, 0.25],
+    [-19.0, 35.5, 0.25],
+    [-17.5, 32.5, 0.25],
+    [-17.5, 30.5, 0.25],
 ]
 
 # 信号灯颜色名称 -> QLabsTrafficLight 颜色常量
@@ -222,6 +231,34 @@ def spawn_crosswalks(qlabs, verbose=True):
     return handles
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+#region : 锥桶生成
+
+def spawn_cones(qlabs, verbose=True):
+    """生成 4 个交通锥桶（QLabsTrafficCone.spawn_id_degrees）。"""
+    if verbose:
+        print('\n[要素：锥桶] 生成锥桶（QLabsTrafficCone.spawn_id_degrees）：')
+    cone = QLabsTrafficCone(qlabs)
+    handles = []
+    for i, position in enumerate(CONE_POSITIONS):
+        status = cone.spawn_id_degrees(
+            actorNumber=200 + i,
+            location=position,
+            rotation=[0, 0, 0],
+            scale=[1, 1, 1],
+            configuration=0,
+            waitForConfirmation=True,
+        )
+        handle = dict(actorNumber=200 + i, position=position, status=status)
+        handles.append(handle)
+        if verbose:
+            print('  [{}/{}] actor={}  pos=({:.1f}, {:.1f}, {:.2f})  {}'.format(
+                i + 1, len(CONE_POSITIONS), 200 + i,
+                position[0], position[1], position[2],
+                'OK' if status in (None, 0) else 'FAIL({})'.format(status)))
+    return handles
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 #region : 要素二 信号灯（trafficLight.spawn_id_degrees）
 def spawn_traffic_lights(qlabs, initialColor=INITIAL_LIGHT_COLOR, verbose=True):
     """
@@ -370,6 +407,8 @@ def setup(
     crosswalks = spawn_crosswalks(qlabs, verbose=verbose)
     # ---- 要素二：信号灯 4 个 ----
     trafficLights = spawn_traffic_lights(qlabs, initialColor=initialLightColor, verbose=verbose)
+    # ---- 锥桶 4 个 ----
+    cones = spawn_cones(qlabs, verbose=verbose)
     # ---- 车辆与实时模型 ----
     vehicle = None
     vehicleLocation = None
@@ -385,17 +424,22 @@ def setup(
                         if item['status'] not in (None, 0)]
     failedLights = [item['name'] for item in trafficLights
                     if item['status'] not in (None, 0)]
+    failedCones = [item['position'] for item in cones
+                   if item['status'] not in (None, 0)]
     if verbose:
-        print('\n场景搭建完成：斑马线 {}/{} 条，信号灯 {}/{} 个{}。'.format(
+        print('\n场景搭建完成：斑马线 {}/{} 条，信号灯 {}/{} 个，锥桶 {}/{} 个{}。'.format(
             len(crosswalks) - len(failedCrosswalks), len(crosswalks),
             len(trafficLights) - len(failedLights), len(trafficLights),
+            len(cones) - len(failedCones), len(cones),
             '，车辆 1 台' if vehicle is not None else '，未生成车辆'))
-        if failedCrosswalks or failedLights:
-            print('[警告] 生成失败的要素：{} {}'.format(failedCrosswalks, failedLights))
+        if failedCrosswalks or failedLights or failedCones:
+            print('[警告] 生成失败的要素：斑马线 {}  信号灯 {}  锥桶 {}'.format(
+                failedCrosswalks, failedLights, failedCones))
     return {
         'qlabs': qlabs,
         'crosswalks': crosswalks,
         'traffic_lights': trafficLights,
+        'cones': cones,
         'vehicle': vehicle,
         'vehicle_location': vehicleLocation,
         'vehicle_orientation': vehicleOrientation,
