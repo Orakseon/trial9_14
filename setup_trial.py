@@ -1,0 +1,515 @@
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+#region : 文件说明与导入
+
+"""
+setup_trial.py
+结题综合演示 - 虚拟场景搭建脚本（QLabs / QCar Cityscape 场景）
+
+本脚本按任务给定坐标生成演示所需的交通要素（运行一次即可在 QLabs 中把场景搭好）：
+    要素一：斑马线 5 条        —— crosswalk.spawn_degrees(...)
+    要素二：信号灯 4 个        —— trafficLight.spawn_id_degrees(...)
+                                （严格遵循右侧通行原则，灯头面向来车方向）
+
+坐标系约定（重要）：
+    坐标表中的数值为 SDCS 路网世界坐标（与 SDCSRoadMap 的 nodeSequence=[0,23,0] 同一坐标系，
+    SDCS 节点位姿约为 ±3 m，例如节点 0 为 (0.00, 0.13, -90°)）。
+    QLabs 场景坐标 = SDCS 世界坐标 × QLABS_SCALE，与 0/qlabs_setup_task01.py 中
+    “location=[p*10 for p in initialPosition]” 的车辆生成约定完全一致，因此本脚本默认
+    QLABS_SCALE = 10.0（车辆、斑马线、信号灯使用同一换算关系，场景比例才会正确）。
+
+用法：
+    python setup_trial.py                 # 搭建场景（含车辆）并保持运行，Ctrl+C 退出
+    python setup_trial.py --no-vehicle    # 只搭交通要素，不生成车辆
+    python setup_trial.py --color red     # 信号灯初始为红灯（green/red/yellow/none）
+    python setup_trial.py --cycle         # 运行中自动周期切换信号灯颜色（便于演示停车/通行）
+"""
+
+import argparse
+import math
+import os
+import sys
+import time
+
+from qvl.crosswalk import QLabsCrosswalk
+from qvl.free_camera import QLabsFreeCamera
+from qvl.qcar2 import QLabsQCar2
+from qvl.qlabs import QuanserInteractiveLabs
+from qvl.real_time import QLabsRealTime
+from qvl.system import QLabsSystem
+from qvl.traffic_light import QLabsTrafficLight
+
+# 实时模型路径：与官方 pal.resources.rtmodels.QCAR2 完全等价
+# （rtmodels.QCAR2 = <环境变量 RTMODELS_DIR>/QCar2/QCar2_Workspace）。
+# 这里直接由环境变量拼装，避免依赖 Quanser PAL —— pal 库只随 QCar SDK 安装，
+# 其它电脑上可能没有（且 rtmodels 在缺少 RTMODELS_DIR 时会直接抛 KeyError）。
+# 取路径优先级：RTMODELS_DIR → QAL_DIR\0_libraries\resources\rt_models → 只传模型名
+# （最后一种与官方示例 terminate_real_time_model('QCar2_Workspace') 的用法一致）。
+RT_MODEL_DIR = os.environ.get('RTMODELS_DIR')
+if not RT_MODEL_DIR:
+    _qalDir = os.environ.get('QAL_DIR')
+    if _qalDir:
+        _candidate = os.path.join(_qalDir, '0_libraries', 'resources', 'rt_models')
+        if os.path.isdir(_candidate):
+            RT_MODEL_DIR = _candidate
+QCAR2_RT_MODEL = (os.path.normpath(os.path.join(RT_MODEL_DIR, 'QCar2', 'QCar2_Workspace'))
+                  if RT_MODEL_DIR else 'QCar2_Workspace')
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 场景参数
+
+QLABS_SCALE = 10.0              # SDCS 世界坐标 -> QLabs 场景坐标 的放大倍数
+CROSSWALK_Z_LIFT = 0.005        # 斑马线抬升量（避免与地面 z-fighting，可按需改 0.0）
+TITLE = 'Final Trial: YOLO Perception - Decision - Control'
+
+NODE_SEQUENCE = [0, 23, 0]      # 与主程序一致的演示路线（仅用于取车辆初始位姿）
+
+# 信号灯初始颜色：'green' / 'red' / 'yellow' / 'none'
+INITIAL_LIGHT_COLOR = 'green'
+
+# 运行中自动切换信号灯（--cycle 打开）：切换间隔（秒）
+LIGHT_CYCLE_INTERVAL = 6.0
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 要素定义表（坐标均为 SDCS 世界坐标）
+
+# 要素一：斑马线 5 条（crosswalk.spawn_degrees 接口，坐标与朝向按任务给定值）
+CROSSWALK_SPECS = [
+    dict(name='中央北侧斑马线', location=[0.1, 1.4, 0.0], rotation=[0, 0, 0]),
+    dict(name='中央南侧斑马线', location=[0.1, 0.5, 0.0], rotation=[0, 0, 0]),
+    dict(name='中央西侧斑马线', location=[-0.4, 0.9, 0.0], rotation=[0, 0, 90]),
+    dict(name='中央东侧斑马线', location=[0.6, 0.9, 0.0], rotation=[0, 0, 90]),
+    dict(name='右上方倾斜斑马线', location=[0.9, 3.7, 0.0], rotation=[0, 0, 15]),
+]
+
+# 要素二：信号灯 4 个（trafficLight.spawn_id_degrees 接口，右侧通行、面向来车方向）
+# rotation 的 yaw 含义：0°=面向 +X（东），90°=面向 +Y（北），180°=面向 -X（西），270°=面向 -Y（南）
+TRAFFIC_LIGHT_SPECS = [
+    dict(name='路口西侧信号灯', actorNumber=1, controls='北向南车流',
+         facing='+Y（北）', location=[-0.7, 1.3, 0.0], rotation=[0, 0, 90]),
+    dict(name='路口东侧信号灯', actorNumber=2, controls='东向西车流',
+         facing='+X（东）', location=[0.8, 1.3, 0.0], rotation=[0, 0, 0]),
+    dict(name='路口南侧偏左信号灯', actorNumber=3, controls='西向东车流',
+         facing='-X（西）', location=[-0.4, 0.5, 0.0], rotation=[0, 0, 180]),
+    dict(name='路口南侧偏右信号灯', actorNumber=4, controls='南向北车流',
+         facing='-Y（南）', location=[0.4, 0.5, 0.0], rotation=[0, 0, 270]),
+]
+
+# 信号灯颜色名称 -> QLabsTrafficLight 颜色常量
+_LIGHT_COLOR_NAMES = {
+    'none': 'COLOR_NONE',
+    'red': 'COLOR_RED',
+    'yellow': 'COLOR_YELLOW',
+    'green': 'COLOR_GREEN',
+}
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 通用工具
+
+def to_qlabs_position(location, zLift=0.0):
+    """
+    SDCS 世界坐标 -> QLabs 场景坐标。
+
+    换算关系与 0/qlabs_setup_task01.py 中车辆生成一致（location=[p*10 for p in initialPosition]）：
+        QLabs.x = SDCS.x * QLABS_SCALE
+        QLabs.y = SDCS.y * QLABS_SCALE
+        QLabs.z = SDCS.z + zLift
+    """
+    return [
+        float(location[0]) * QLABS_SCALE,
+        float(location[1]) * QLABS_SCALE,
+        float(location[2]) + float(zLift),
+    ]
+
+
+def to_qlabs_yaw(rotationDeg):
+    """取朝向角（度）；本场景中各要素 roll/pitch 均为 0。"""
+    return float(rotationDeg[2])
+
+
+def light_color_constant(trafficLight, colorName):
+    """颜色名称 -> QLabsTrafficLight 的颜色常量（如 'green' -> COLOR_GREEN）。"""
+    key = str(colorName).strip().lower()
+    if key not in _LIGHT_COLOR_NAMES:
+        raise ValueError('未知的信号灯颜色：{}（可选：{}）'.format(
+            colorName, ', '.join(_LIGHT_COLOR_NAMES.keys())))
+    return getattr(trafficLight, _LIGHT_COLOR_NAMES[key])
+
+
+def _spawn_result(result):
+    """解析 spawn_degrees / spawn_id_degrees 的返回值，统一为 (status, actorNumber)。"""
+    if isinstance(result, tuple):
+        status = result[0]
+        actorNumber = result[1] if len(result) > 1 else None
+        return status, actorNumber
+    return result, None
+
+
+def _status_text(status):
+    """把生成状态码转成可读文本。"""
+    if status is None:
+        return '已发送（未等待确认）'
+    if status == 0:
+        return '成功'
+    return '失败（状态码 {}）'.format(status)
+
+
+def default_vehicle_pose():
+    """
+    车辆默认初始位姿：取 SDCS 路网 nodeSequence 起点的节点位姿（与主程序一致）。
+
+    返回：(SDCS 世界坐标 [x, y, 0], QLabs 车辆姿态 [roll, pitch, yaw(rad)])
+    """
+    try:
+        from hal.products.mats import SDCSRoadMap
+        roadmap = SDCSRoadMap(leftHandTraffic=False)
+        nodePose = roadmap.get_node_pose(NODE_SEQUENCE[0]).squeeze()
+        return ([float(nodePose[0]), float(nodePose[1]), 0.0],
+                [0.0, 0.0, float(nodePose[2])])
+    except Exception as error:      # 路网不可用时退化为已知的节点 0 位姿
+        print('[提示] 读取 SDCS 路网失败（{}），使用默认车辆位姿 (0.00, 0.13, -90°)。'.format(error))
+        return [0.0, 0.13, 0.0], [0.0, 0.0, -math.pi / 2]
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 要素一 斑马线（crosswalk.spawn_degrees）
+
+def spawn_crosswalks(qlabs, verbose=True):
+    """
+    生成 5 条斑马线。
+
+    使用接口：crosswalk.spawn_degrees(location=..., rotation=..., scale=..., configuration=...,
+                                      waitForConfirmation=...)（由 QLabs 自动分配 actorNumber）
+
+    参数：
+        qlabs    已连接的 QuanserInteractiveLabs 对象
+        verbose  是否打印每条斑马线的生成结果
+    返回：
+        handles 列表，元素为 dict(name, location, rotation, status, actorNumber)
+    """
+    crosswalk = QLabsCrosswalk(qlabs)
+    handles = []
+
+    if verbose:
+        print('\n[要素一] 生成斑马线（crosswalk.spawn_degrees）：')
+
+    for index, spec in enumerate(CROSSWALK_SPECS, start=1):
+        location = to_qlabs_position(spec['location'], CROSSWALK_Z_LIFT)
+        rotation = spec['rotation']
+
+        status, actorNumber = _spawn_result(crosswalk.spawn_degrees(
+            location=location,
+            rotation=rotation,
+            scale=[1, 1, 1],
+            configuration=0,
+            waitForConfirmation=True,
+        ))
+
+        handles.append(dict(
+            name=spec['name'],
+            location=location,
+            rotation=rotation,
+            status=status,
+            actorNumber=actorNumber,
+        ))
+
+        if verbose:
+            print('  [{}/{}] {:<10s} 朝向 {:>3.0f}°  QLabs 坐标 (x={:7.2f}, y={:7.2f}, z={:5.3f})  {}'.format(
+                index, len(CROSSWALK_SPECS), spec['name'], to_qlabs_yaw(rotation),
+                location[0], location[1], location[2], _status_text(status)))
+
+    return handles
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 要素二 信号灯（trafficLight.spawn_id_degrees）
+
+def spawn_traffic_lights(qlabs, initialColor=INITIAL_LIGHT_COLOR, verbose=True):
+    """
+    生成 4 个信号灯并设置初始颜色。
+
+    使用接口：trafficLight.spawn_id_degrees(actorNumber=..., location=..., rotation=...,
+                                            configuration=0, waitForConfirmation=...)，
+    configuration=0 为右侧通行布置；朝向按“面向来车方向”给定：
+        0° = 面向 +X（东）    90° = 面向 +Y（北）
+        180° = 面向 -X（西）  270° = 面向 -Y（南）
+
+    参数：
+        qlabs        已连接的 QuanserInteractiveLabs 对象
+        initialColor 初始颜色：'green' / 'red' / 'yellow' / 'none'
+        verbose      是否打印每个信号灯的生成结果
+    返回：
+        handles 列表，元素为 dict(name, actorNumber, controls, facing, location, rotation,
+                                   status, colorOk, handle)
+    """
+    handles = []
+
+    if verbose:
+        print('\n[要素二] 生成信号灯（trafficLight.spawn_id_degrees，右侧通行、面向来车方向）：')
+
+    for spec in TRAFFIC_LIGHT_SPECS:
+        location = to_qlabs_position(spec['location'])
+        trafficLight = QLabsTrafficLight(qlabs)
+
+        status, _ = _spawn_result(trafficLight.spawn_id_degrees(
+            actorNumber=spec['actorNumber'],
+            location=location,
+            rotation=spec['rotation'],
+            configuration=0,
+            waitForConfirmation=True,
+        ))
+
+        # 生成后立即设置初始颜色（同一句柄即指向刚生成的 actorNumber）
+        colorOk = trafficLight.set_color(
+            color=light_color_constant(trafficLight, initialColor),
+            waitForConfirmation=True)
+
+        handles.append(dict(
+            name=spec['name'],
+            actorNumber=spec['actorNumber'],
+            controls=spec['controls'],
+            facing=spec['facing'],
+            location=location,
+            rotation=spec['rotation'],
+            status=status,
+            colorOk=colorOk,
+            handle=trafficLight,
+        ))
+
+        if verbose:
+            print('  [{}] {:<10s} 控制{:<7s} 面向 {:<7s} 朝向 {:>3.0f}°  QLabs 坐标 (x={:7.2f}, y={:7.2f})  生成{}  初始{}'.format(
+                spec['actorNumber'], spec['name'], spec['controls'], spec['facing'],
+                to_qlabs_yaw(spec['rotation']), location[0], location[1],
+                _status_text(status), initialColor))
+
+    return handles
+
+
+def set_light_color(lightHandles, colorName, actorNumbers=None):
+    """
+    切换信号灯颜色（演示红灯停车 / 绿灯通行时可在运行中调用）。
+
+    参数：
+        lightHandles  setup() 返回的 scene['traffic_lights']
+        colorName     'green' / 'red' / 'yellow' / 'none'
+        actorNumbers  None 表示全部信号灯；或传入列表（如 [1, 4]）只切换指定信号灯
+    返回：
+        成功设置的信号灯数量
+    """
+    count = 0
+    for item in lightHandles:
+        if actorNumbers is not None and item['actorNumber'] not in actorNumbers:
+            continue
+        handle = item['handle']
+        if handle.set_color(color=light_color_constant(handle, colorName),
+                            waitForConfirmation=True):
+            count += 1
+    return count
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 车辆与实时模型
+
+def spawn_vehicle(qlabs, initialPosition=None, initialOrientation=None, verbose=True):
+    """
+    生成 QCar2（actorNumber=0）、自由相机并接管视角。
+
+    参数：
+        qlabs              已连接的 QuanserInteractiveLabs 对象
+        initialPosition    SDCS 世界坐标 [x, y, z]；None 表示取路网起点（节点 0）
+        initialOrientation QLabs 车辆姿态（弧度）[roll, pitch, yaw]；None 表示取路网起点航向
+    返回：
+        vehicleHandle（QLabsQCar2），同时返回使用的位姿
+    """
+    if initialPosition is None or initialOrientation is None:
+        defaultPosition, defaultOrientation = default_vehicle_pose()
+        if initialPosition is None:
+            initialPosition = defaultPosition
+        if initialOrientation is None:
+            initialOrientation = defaultOrientation
+
+    location = to_qlabs_position(initialPosition)
+
+    vehicle = QLabsQCar2(qlabs)
+    vehicle.spawn_id(
+        actorNumber=0,
+        location=location,
+        rotation=initialOrientation,
+        waitForConfirmation=True,
+    )
+
+    camera = QLabsFreeCamera(qlabs)
+    camera.spawn()
+    vehicle.possess()
+
+    if verbose:
+        print('\n[车辆] QCar2 生成于 QLabs (x={:.2f}, y={:.2f})，航向 {:.1f}°'
+              '（对应 SDCS 坐标 x={:.3f}, y={:.3f}, 航向 {:.1f}°）'.format(
+                  location[0], location[1], math.degrees(initialOrientation[2]),
+                  float(initialPosition[0]), float(initialPosition[1]),
+                  math.degrees(initialOrientation[2])))
+
+    return vehicle, location, initialOrientation
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 场景搭建主函数
+
+def setup(
+        initialPosition=None,
+        initialOrientation=None,
+        spawnVehicle=True,
+        initialLightColor=INITIAL_LIGHT_COLOR,
+        startRealTimeModel=True,
+        verbose=True,
+):
+    """
+    连接 QLabs 并搭建结题演示场景（斑马线 5 条 + 信号灯 4 个，可选生成车辆）。
+
+    参数：
+        initialPosition        车辆初始位置（SDCS 世界坐标）；None 取路网起点
+        initialOrientation     车辆初始姿态（弧度）；None 取路网起点航向
+        spawnVehicle           是否生成车辆（含自由相机与实时模型）
+        initialLightColor      信号灯初始颜色 'green' / 'red' / 'yellow' / 'none'
+        startRealTimeModel     是否启动 QCar2 实时模型（仿真车辆可被 pal 库控制）
+        verbose                是否打印搭建明细
+    返回：
+        scene 字典：qlabs / crosswalks / traffic_lights / vehicle / ...
+    """
+    qlabs = QuanserInteractiveLabs()
+
+    print('Connecting to QLabs...')
+    if not qlabs.open('localhost'):
+        print('Unable to connect to QLabs')
+        sys.exit()
+
+    print('Connected to QLabs')
+
+    # 清理上一次生成的 actor 与实时模型，保证场景干净
+    qlabs.destroy_all_spawned_actors()
+    QLabsRealTime().terminate_all_real_time_models()
+
+    QLabsSystem(qlabs).set_title_string(TITLE)
+
+    # ---- 要素一：斑马线 5 条 ----
+    crosswalks = spawn_crosswalks(qlabs, verbose=verbose)
+
+    # ---- 要素二：信号灯 4 个 ----
+    trafficLights = spawn_traffic_lights(qlabs, initialColor=initialLightColor, verbose=verbose)
+
+    # ---- 车辆与实时模型 ----
+    vehicle = None
+    vehicleLocation = None
+    vehicleOrientation = None
+    if spawnVehicle:
+        vehicle, vehicleLocation, vehicleOrientation = spawn_vehicle(
+            qlabs, initialPosition, initialOrientation, verbose=verbose)
+        if startRealTimeModel:
+            QLabsRealTime().start_real_time_model(QCAR2_RT_MODEL)
+            if verbose:
+                print('[实时模型] QCar2 实时模型已启动，可运行主程序进行识别-决策-控制演示。')
+
+    failedCrosswalks = [item['name'] for item in crosswalks
+                        if item['status'] not in (None, 0)]
+    failedLights = [item['name'] for item in trafficLights
+                   if item['status'] not in (None, 0)]
+    if verbose:
+        print('\n场景搭建完成：斑马线 {}/{} 条，信号灯 {}/{} 个{}。'.format(
+            len(crosswalks) - len(failedCrosswalks), len(crosswalks),
+            len(trafficLights) - len(failedLights), len(trafficLights),
+            '，车辆 1 台' if vehicle is not None else '，未生成车辆'))
+        if failedCrosswalks or failedLights:
+            print('[警告] 生成失败的要素：{} {}'.format(failedCrosswalks, failedLights))
+
+    return {
+        'qlabs': qlabs,
+        'crosswalks': crosswalks,
+        'traffic_lights': trafficLights,
+        'vehicle': vehicle,
+        'vehicle_location': vehicleLocation,
+        'vehicle_orientation': vehicleOrientation,
+        'initial_light_color': initialLightColor,
+        'scale': QLABS_SCALE,
+    }
+
+
+def terminate():
+    """停止 QCar2 实时模型（与 0/qlabs_setup_task01.py 的 terminate 保持一致）。"""
+    QLabsRealTime().terminate_real_time_model('QCar2_Workspace')
+
+#endregion
+# -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+
+#region : 独立运行入口
+
+def parse_arguments():
+    """命令行参数解析。"""
+    parser = argparse.ArgumentParser(
+        description='结题演示 - 虚拟场景搭建：斑马线 5 条 + 信号灯 4 个（可选生成车辆）')
+    parser.add_argument('--no-vehicle', dest='spawnVehicle', action='store_false',
+                        help='只搭建交通要素，不生成车辆')
+    parser.add_argument('--no-rt', dest='startRealTimeModel', action='store_false',
+                        help='不启动 QCar2 实时模型（仅静态预览场景）')
+    parser.add_argument('--color', dest='color', default=INITIAL_LIGHT_COLOR,
+                        choices=list(_LIGHT_COLOR_NAMES.keys()),
+                        help='信号灯初始颜色（默认 {}）'.format(INITIAL_LIGHT_COLOR))
+    parser.add_argument('--cycle', dest='cycle', action='store_true',
+                        help='运行中自动切换信号灯颜色（红/绿交替），便于演示红灯停车与绿灯通行')
+    parser.add_argument('--interval', dest='interval', type=float, default=LIGHT_CYCLE_INTERVAL,
+                        help='信号灯自动切换间隔（秒，默认 {}）'.format(LIGHT_CYCLE_INTERVAL))
+    return parser.parse_args()
+
+
+def main():
+    """搭建场景并保持运行（Ctrl+C 退出）。"""
+    args = parse_arguments()
+
+    scene = setup(
+        spawnVehicle=args.spawnVehicle,
+        initialLightColor=args.color,
+        startRealTimeModel=args.startRealTimeModel,
+    )
+
+    print('\n提示：')
+    print('  1) 场景已就绪，可运行主程序 QCar2_YOLO_Decision_Control.py 进行识别-决策-控制演示；')
+    print('  2) 运行中可用 set_light_color(scene["traffic_lights"], "red") 切换信号灯颜色；')
+    print('  3) 本脚本会保持运行以维持实时模型，按 Ctrl+C 结束。')
+
+    lightIsGreen = (args.color == 'green')
+    nextToggle = time.time() + args.interval
+
+    try:
+        while True:
+            time.sleep(0.2)
+            if args.cycle and time.time() >= nextToggle:
+                lightIsGreen = not lightIsGreen
+                colorName = 'green' if lightIsGreen else 'red'
+                count = set_light_color(scene['traffic_lights'], colorName)
+                print('  [{}] 信号灯切换为 {}（{} 个）'.format(
+                    time.strftime('%H:%M:%S'), '绿灯' if lightIsGreen else '红灯', count))
+                nextToggle = time.time() + args.interval
+    except KeyboardInterrupt:
+        print('\n收到中断，正在收尾...')
+    finally:
+        terminate()
+        scene['qlabs'].close()
+        print('Done!')
+
+
+if __name__ == '__main__':
+    main()
+
+#endregion
+
+
+
+

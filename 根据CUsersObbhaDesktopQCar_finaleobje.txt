@@ -1,0 +1,23 @@
+根据"C:\Users\Obbha\Desktop\QCar_finale\objects_trial"中的代码，在"C:\Users\Obbha\Desktop\QCar_finale\trial9_14"中作setup_trial.py，要求运行代码构建虚拟场景。虚拟场景包含的要素如下
+
+要素一：斑马线，共5条，请使用 crosswalk.spawn_degrees 接口生成
+
+中央北侧斑马线：location=[0.0, 1.5, 0.0]，rotation=[0, 0, 0]
+
+中央南侧斑马线：location=[0.0, 0.9, 0.0]，rotation=[0, 0, 0]
+
+中央西侧斑马线：location=[-0.5, 1.2, 0.0]，rotation=[0, 0, 90]
+
+中央东侧斑马线：location=[0.5, 1.2, 0.0]，rotation=[0, 0, 90]
+
+右上方倾斜斑马线：location=[0.8, 3.1, 0.0]，rotation=[0, 0, 45]
+
+要素二：信号灯，共4个，请使用 trafficLight1.spawn_id_degrees 接口生成。请严格遵循道路右侧通行原则，信号灯需要面向来车方向。
+
+路口西侧信号灯，控制北向南车流，面向北(+Y)：actorNumber=1，location=[-0.7, 1.3, 0.0]，rotation=[0, 0, 90]
+
+路口东侧信号灯，控制东向西车流，面向东(+X)：actorNumber=2，location=[0.8, 1.3, 0.0]，rotation=[0, 0, 0]
+
+路口南侧偏左信号灯，控制西向东车流，面向西(-X)：actorNumber=3，location=[-0.4, 0.5, 0.0]，rotation=[0, 0, 180]
+
+路口南侧偏右信号灯，控制南向北车流，面向南(-Y)：actorNumber=4，location=[0.4, 0.5, 0.0]，rotation=[0, 0, 270]

@@ -1,0 +1,4 @@
+skill
+任务描述：做利用YOLO识别交通要素及QCar车辆控制与决策的.py代码；
+参考："C:\Users\Obbha\Desktop\QCar_finale\0"是有挂控制与决策的示例；"C:\Users\Obbha\Desktop\QCar_finale\5_factors\sd"包含QCar相关YOLO使用及相关pytorch数据；
+要求细则：无需场景构建，只需搭建识别决策控制层。仿照"C:\Users\Obbha\Desktop\QCar_finale\0\QCar2_Steering_Control.py"搭建即可
