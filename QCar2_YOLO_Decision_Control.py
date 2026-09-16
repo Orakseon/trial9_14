@@ -40,7 +40,7 @@ import cv2
 import numpy as np
 import pyqtgraph as pg
 
-from pal.products.qcar import QCar, QCarGPS, QCarRealSense, IS_PHYSICAL_QCAR
+from pal.products.qcar import QCar, QCarGPS, QCarLidar, QCarRealSense, IS_PHYSICAL_QCAR
 from pal.utilities.scope import MultiScope
 from hal.content.qcar_functions import QCarEKF
 from hal.products.mats import SDCSRoadMap
@@ -53,6 +53,7 @@ from perception_yolo import (
     draw_status_panel,
 )
 from decision_layer import DecisionParameters, DecisionResult, TrafficDecision
+from lidar_perception import DEFAULT_LIDAR_CONFIG, LidarObstacle, LidarProcessor
 from control_layer import (
     OffsetShaper,
     SpeedController,
@@ -88,6 +89,10 @@ lookAheadDistance = 0.2     # 控制点前视距离（m）
 maxSteeringAngleDeg = 30    # 前轮转角限幅（°）
 stanleySpeedFloor = 0.10    # Stanley 速度分母下限（m/s），避免停车时转向增益发散
 offsetRateLimit = 0.60      # 绕行横向偏移变化率上限（m/s）
+
+# ===== Lidar 激光雷达参数 =====
+enableLidar = True                  # 是否启用激光雷达互补感知
+lidarDetectInterval = 5             # 每隔 N 个控制周期执行一次 lidar 检测（控制周期 100Hz，5 次 ≈ 20Hz）
 
 # ===== 油门缩放（转弯/锥桶避让时降油门，避免车速过冲）=====
 turnThrottleScale = 0.90          # 转弯时油门缩放（直线巡航的90%）
@@ -368,6 +373,23 @@ def controlLoop(shared: SharedState) -> None:
             gps = QCarGPS(initialPose=calibrationPose, calibrate=calibrate)
         else:
             gps = memoryview(b'')
+
+        # ---- Lidar 激光雷达初始化 ----
+        lidarProcessor = None
+        lidarDetectCounter = 0
+        lidarObstacleDesc = ''
+        if enableLidar:
+            try:
+                lidarProcessor = LidarProcessor(config=DEFAULT_LIDAR_CONFIG)
+                if not lidarProcessor.open():
+                    print('[Lidar] 激光雷达不可用，将以纯视觉模式运行')
+                    lidarProcessor = None
+                else:
+                    print('[Lidar] 激光雷达就绪，障碍检测间隔 {} 帧（~{:.0f} Hz）'.format(
+                        lidarDetectInterval, controllerUpdateRate / lidarDetectInterval))
+            except Exception as e:
+                print('[Lidar] 激光雷达初始化异常：', e)
+                lidarProcessor = None
     except Exception as error:
         KILL_THREAD = True
         print('[错误] QCar/GPS 接口初始化失败：{}'.format(error))
@@ -410,6 +432,22 @@ def controlLoop(shared: SharedState) -> None:
 
             # ---- 决策：使用识别线程发布的最新识别结果 ----
             detectionFrame, perceptionPeriod, perceptionError = shared.readDetection()
+
+            # ---- Lidar 互补感知：读取雷达并合并障碍物 ----
+            if lidarProcessor is not None:
+                lidarDetectCounter += 1
+                if lidarDetectCounter >= lidarDetectInterval:
+                    lidarDetectCounter = 0
+                    try:
+                        if lidarProcessor.read():
+                            lidarFrame = lidarProcessor.detect()
+                            lidarDets = lidarProcessor.to_detections(lidarFrame.obstacles)
+                            lidarObstacleDesc = lidarFrame.describe()
+                            if lidarDets and detectionFrame is not None:
+                                detectionFrame.detections.extend(lidarDets)
+                    except Exception:
+                        lidarObstacleDesc = 'Lidar err'
+
             decision = decisionModule.update(detectionFrame, dt, v)
 
             # ---- 控制律与指令写入 ----
@@ -483,6 +521,7 @@ def controlLoop(shared: SharedState) -> None:
                     'inference': float(shared.inferenceTime),
                     'blind': 1.0 if detectionFrame is None else 0.0,
                     'perceptionError': perceptionError,
+                    'lidar': lidarObstacleDesc if enableLidar else '',
                 })
                 count = 0
 
@@ -499,6 +538,12 @@ def controlLoop(shared: SharedState) -> None:
                 continue
             try:
                 resource.terminate()
+            except Exception:
+                pass
+        # 释放 Lidar 资源
+        if lidarProcessor is not None:
+            try:
+                lidarProcessor.terminate()
             except Exception:
                 pass
 
@@ -666,6 +711,7 @@ if __name__ == '__main__':
                     '前轮转角: {:+.3f} rad   绕行偏移: {:+.2f} m'.format(
                         telemetry.get('delta', 0.0), telemetry.get('offset', 0.0)),
                     '识别结果: {}'.format(detectionFrame.summaryText()),
+                    'Lidar: {}'.format(telemetry.get('lidar', '')),
                     '推理耗时: {:.0f} ms   识别周期: {:.2f} s'.format(
                         detectionFrame.inferenceTime * 1000, perceptionPeriod),
                 ]
