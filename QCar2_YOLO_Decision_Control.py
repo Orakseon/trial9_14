@@ -113,11 +113,11 @@ detectPeriodMax = 0.33      # 识别周期上限（秒），确保最低约 3 Hz
 # 各阈值以“面积占比 / 归一化坐标”表达，与相机分辨率无关；
 # 现场标定时可打开可视化画面上的走廊辅助线（drawCorridorGuide）对照调整。
 decisionParams = DecisionParameters(
-    cruiseSpeed=0.50,                 # 巡航速度
+    cruiseSpeed=0.30,                 # 巡航速度（0.50→0.30，更安全的上限）
     blindSpeed=0.15,                  # 感知失效时的谨慎速度（改为 0.0 则停车等待）
     crosswalkSpeed=0.20,              # 斑马线/前方交通要素限速
     coneSlowSpeed=0.20,               # 远距锥桶限速（0.30→0.20，更早减速）
-    bypassSpeed=0.25,                 # 绕行锥桶限速
+    bypassSpeed=0.12,                 # 绕行锥桶限速（0.25→0.12，进一步降低绕行速度）
     detectionTimeout=1.5,             # 识别结果有效期（秒）
     corridorHalfWidth=0.32,           # 前方走廊半宽（画面宽度比例）
     trafficLightCorridorHalfWidth=0.38,
@@ -692,8 +692,6 @@ if __name__ == '__main__':
             camera.terminate()
         except Exception as error:
             print('[警告] 相机资源释放异常：', error)
-    if showCameraWindow:
-        cv2.destroyAllWindows()
 
     print('-' * 70)
     if shared.decisionModule is not None:
@@ -709,6 +707,24 @@ if __name__ == '__main__':
             sceneModule.terminate()
         except Exception as error:
             print('[警告] QLabs 实时模型释放异常：', error)
+
+    # 演示结束后保持综合演示窗口与相机画面，按任意键关闭
+    print('\n演示结束，窗口将保持打开。按 ESC 或关闭窗口退出...')
+    while True:
+        if showScope:
+            MultiScope.refreshAll()
+        key = cv2.waitKey(30) & 0xFF
+        if key == 27:  # ESC
+            break
+        # 窗口被用户手动关闭则退出
+        if showCameraWindow:
+            try:
+                if cv2.getWindowProperty(cameraWindowName, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except Exception:
+                break
+    if showCameraWindow:
+        cv2.destroyAllWindows()
     #endregion
 
 #endregion
