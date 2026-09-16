@@ -419,13 +419,27 @@ def spawn_people(qlabs, scale, verbose=True):
 
 
 def _pedestrian_loop(data):
-    """单个行人循环：在 start 和 end 之间往返走动。"""
+    """单个行人循环：在 start 和 end 之间往返走动。
+    用 waitForConfirmation=False + sleep 控制节奏，
+    外加异常保护避免单次 move 失败导致线程退出。"""
     person = data['person']
+    # 估算单程耗时（距离 / WALK速度），用于 sleep 替代 waitForConfirmation
+    import math as _math
+    dx = data['end'][0] - data['start'][0]
+    dy = data['end'][1] - data['start'][1]
+    tripDist = _math.hypot(dx, dy)
+    # WALK ≈ 1.4 m/s，加 0.5s 缓冲
+    tripTime = max(tripDist / 1.4 + 0.5, 1.5)
     while True:
-        person.move_to(location=data['end'], speed=person.WALK, waitForConfirmation=True)
-        time.sleep(1)
-        person.move_to(location=data['start'], speed=person.WALK, waitForConfirmation=True)
-        time.sleep(1)
+        try:
+            person.move_to(location=data['end'], speed=person.WALK,
+                           waitForConfirmation=False)
+            time.sleep(tripTime)
+            person.move_to(location=data['start'], speed=person.WALK,
+                           waitForConfirmation=False)
+            time.sleep(tripTime)
+        except Exception:
+            time.sleep(2)  # 异常时短暂休眠后重试，不退出线程
 
 
 def start_people(people):
